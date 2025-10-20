@@ -10,24 +10,38 @@
     ca: fs.readFileSync('/etc/apache2/certs/sub.class2.code.ca.crt').toString()
 };*/
 var http = require('http');
-var app = http.createServer(wshandler);
 var fs = require('fs');
 var config = null;
 var configpath = __dirname+'/../docs/.config.json';
 
+function wshandler(req, res) {
+    // Basic health endpoint and default 404
+    if (req.url === '/healthz') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+        return;
+    }
+    res.writeHead(404);
+    res.end();
+}
+
+var app = http.createServer(wshandler);
+
 if (fs.existsSync(configpath))
     config = JSON.parse(fs.readFileSync(configpath, 'utf8'));
 var port = (config && config.hasOwnProperty('feedserver_port')) ? config.feedserver_port : 8080;
-var ip = (!config || config.feedserver_proxy) ? '127.0.0.1' : '0.0.0.0';
+// Bind to all interfaces by default for containerized setups; allow override via FEED_BIND
+var ip = process.env.FEED_BIND || ((config && config.feedserver_proxy===true) ? '127.0.0.1' : '0.0.0.0');
 var hashkey = (config && config.hasOwnProperty('feedserver_key')) ? config.feedserver_key : "5d40b50e172646b845640f50f296ac3fcbc191a7469260c46903c43cc6310ace"; // key for php interaction, provides extra security
 
 app.listen(port, ip);
 
-io = require('socket.io').listen(app);
-
-function wshandler(req, res) {
-    // socket handler; do nothing
-}
+// socket.io v4 server
+const { Server } = require('socket.io');
+const io = new Server(app, {
+    // Allow same-origin by default; adjust CORS as needed
+    cors: { origin: true, methods: ["GET","POST"] }
+});
 
 var devices = {};
 var sessions = {};
@@ -57,9 +71,23 @@ io.sockets.on('connection', function (socket) {
     // check for hashkey (for php authentication)
     if (!authed) {
         if (socket.handshake.query.hasOwnProperty('hashkey')) {
-            if ((hashkey == socket.handshake.query.hashkey) && (socket.request.connection.remoteAddress=="127.0.0.1")) {
+            // accept connections from private networks if enabled
+            var addr = socket.handshake.address || (socket.request && socket.request.connection && socket.request.connection.remoteAddress);
+            var trustPrivate = (process.env.FEED_TRUST_PRIVATE || 'true').toLowerCase() === 'true';
+            var isPrivate = function(a){
+                if (!a) return false;
+                // normalize IPv6-mapped IPv4
+                if (a.startsWith('::ffff:')) a = a.replace('::ffff:', '');
+                return (
+                    a === '127.0.0.1' || a === '::1' ||
+                    a.startsWith('10.') ||
+                    a.startsWith('192.168.') ||
+                    (a.startsWith('172.') && (function(){ var p = parseInt(a.split('.')[1],10); return p>=16 && p<=31; })())
+                );
+            };
+            if ((hashkey == socket.handshake.query.hashkey) && (!trustPrivate || isPrivate(addr))) {
                 authed = true;
-                console.log("Authorised by hashkey: " + socket.handshake.query.hashkey);
+                console.log("Authorised by hashkey from "+addr);
             }
         }
     }
@@ -79,16 +107,19 @@ io.sockets.on('connection', function (socket) {
         // if device.include is null, send to all auth'd
         var inclall = data.include == null;
         for (var i in devices) {
-            if (inclall || (data.include.hasOwnProperty(i) > 0)) {
-                io.sockets.connected[devices[i].socketid].emit('updates', data.data);
+            if (inclall || (data.include && data.include.hasOwnProperty(i))) {
+                var sid = devices[i].socketid;
+                var sock = io.sockets.sockets.get(sid);
+                if (sock) sock.emit('updates', data.data);
             } else {
                 console.log(i + " not in devicelist, " + JSON.stringify(data.include) + "; discarding.");
             }
         }
         // send to the admin dash
         if (devices.hasOwnProperty(0)) {
-            // send updated device list to admin dash
-            io.sockets.connected[devices[0].socketid].emit('updates', data.data);
+            var asid = devices[0].socketid;
+            var asock = io.sockets.sockets.get(asid);
+            if (asock) asock.emit('updates', data.data);
         }
     });
 
@@ -129,14 +160,16 @@ io.sockets.on('connection', function (socket) {
             delete(devices[request.deviceid]);
             if (request.deviceid != 0) {
                 if (devices.hasOwnProperty(0)) {
-                    // send updated device list to admin dash
-                    io.sockets.connected[devices[0].socketid].emit('updates', {a: "devices", data: JSON.stringify(devices)});
+                    var dsid = devices[0].socketid;
+                    var dsock = io.sockets.sockets.get(dsid);
+                    if (dsock) dsock.emit('updates', {a: "devices", data: JSON.stringify(devices)});
                 }
             }
         });
         if (devices.hasOwnProperty(0)) {
-            // send updated device list to admin dash
-            io.sockets.connected[devices[0].socketid].emit('updates', {a: "devices", data: JSON.stringify(devices)});
+            var dsid = devices[0].socketid;
+            var dsock = io.sockets.sockets.get(dsid);
+            if (dsock) dsock.emit('updates', {a: "devices", data: JSON.stringify(devices)});
         }
         console.log("Device registered");
     });

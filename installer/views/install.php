@@ -1,6 +1,6 @@
 <div style="text-align: center;">
 <?php
-    if ($_REQUEST['doupgrade']) {
+    if (isset($_REQUEST['doupgrade']) && $_REQUEST['doupgrade']) {
         ?>
         <ul class="breadcrumb">
             <li>Check Requirements</li>
@@ -33,10 +33,12 @@
 <script>
     $(function(){
         var frame = $("#installframe");
-        frame.load(function(){
+        frame.on('load', function(){
             $("#install_view").addClass('hide');
             $("#complete_view").removeClass('hide');
         });
-        frame.attr('src', "<?php echo("/installer?".(isset($_REQUEST['doupgrade'])?"upgrade":"install")); ?>");
+        var action = "<?php echo((isset($_REQUEST['doupgrade']) && $_REQUEST['doupgrade'])?"upgrade":"install"); ?>";
+        var src = window.location.origin + "/installer/index.php?" + action;
+        frame.attr('src', src);
     });
 </script>

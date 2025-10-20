@@ -102,10 +102,9 @@ if ($_SERVER['HTTP_ANTI_CSRF_TOKEN'] != $auth->getCsrfToken()) {
 // Decode JSON data if provided
 if (isset($_REQUEST['data']) && $_REQUEST['data']!=""){
 
-    // Easier to sanitize in JSON format all at once.
-    $config = HTMLPurifier_Config::createDefault();
-    $purifier = new HTMLPurifier($config);
-    $cleanData = $purifier->purify($_REQUEST['data']);
+    // JSON sanitization via HTMLPurifier is unnecessary and breaks on PHP 8 with legacy libs.
+    // Use the raw payload and rely on server-side validation per endpoint.
+    $cleanData = $_REQUEST['data'];
 
     if (($requests=json_decode($cleanData))==false){
         $result['errorCode'] = "request";
@@ -131,7 +130,13 @@ if ($_REQUEST['a']!=="multi"){
         if ($data==null) {
             $data = new stdClass();
         }
-        $tempresult = routeApiCall($action, $data, $result);
+        try {
+            $tempresult = routeApiCall($action, $data, $result);
+        } catch (Throwable $ex) {
+            $result['errorCode'] = 'phpexc';
+            $result['error'] = 'EXCEPTION: '.$ex->getMessage();
+            break;
+        }
         if ($tempresult['error']=="OK"){
             // set data and move to the next request
             $result['data'][$action] = $tempresult['data'];

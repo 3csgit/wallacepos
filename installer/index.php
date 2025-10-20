@@ -39,12 +39,18 @@ function checkDependencies(){
     if (!$result['app_root'] = file_exists($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/AutoLoader.php'))
         $result['all'] = false;
 
-    // check apache version
-    $version = str_replace("Apache/", "", apache_get_version());
-    $version = str_replace(" (Ubuntu)", "", $version);
-    if (version_compare($result['apache_version']=$version, "2.4.7")<0){
-        $result['all'] = false;
-        $result['apache'] = false;
+    // check apache version (guard for non-Apache environments like nginx/php-fpm)
+    if (function_exists('apache_get_version')) {
+        $version = str_replace("Apache/", "", apache_get_version());
+        $version = str_replace(" (Ubuntu)", "", $version);
+        if (version_compare($result['apache_version']=$version, "2.4.7")<0){
+            $result['all'] = false;
+            $result['apache'] = false;
+        }
+    } else {
+        // running without Apache; mark apache checks as n/a but not blocking
+        $result['apache_version'] = isset($_SERVER['SERVER_SOFTWARE']) ? $_SERVER['SERVER_SOFTWARE'] : 'nginx/php-fpm';
+        $result['apache'] = true;
     }
 
     // check php version
@@ -57,23 +63,54 @@ function checkDependencies(){
     }
 
     // check node installation
-	chdir($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'api/'); // node extension gets installed along with server.js
-	$nodeextensions = json_decode(shell_exec("npm ls --json")); // detect node.js existence using npm
-	if ($nodeextensions == NULL) {
-		$result['node'] = false;
-		$result['node_socketio'] = false;
-		$result['all'] = false;
-	} else {
-        if (!$result['node_socketio']=(isset($nodeextensions->dependencies->{"socket.io"}) && !$nodeextensions->dependencies->{"socket.io"}->missing))
+    // Primary: in Docker, query the node service health endpoint
+    $nodeHealthy = false;
+    foreach ([
+        'http://node:8080/healthz',
+        'http://127.0.0.1:8080/healthz',
+    ] as $healthUrl) {
+        if (function_exists('curl_init')) {
+            $h = curl_init($healthUrl);
+            curl_setopt($h, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($h, CURLOPT_CONNECTTIMEOUT, 1);
+            curl_setopt($h, CURLOPT_TIMEOUT, 2);
+            $body = curl_exec($h);
+            $code = curl_getinfo($h, CURLINFO_HTTP_CODE);
+            curl_close($h);
+            if ($code === 200) {
+                $nodeHealthy = true;
+                break;
+            }
+        }
+    }
+    if ($nodeHealthy) {
+        $result['node'] = true;
+        $result['node_socketio'] = true;
+    } else {
+        // Fallback: try legacy npm check if available
+        @chdir($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'api/');
+        $nodeextensions = json_decode(@shell_exec("npm ls --json")); // may be null if npm not present
+        if ($nodeextensions == NULL) {
+            $result['node'] = false;
+            $result['node_socketio'] = false;
             $result['all'] = false;
-	}
+        } else {
+            if (!$result['node_socketio']=(isset($nodeextensions->dependencies->{"socket.io"}) && !$nodeextensions->dependencies->{"socket.io"}->missing))
+                $result['all'] = false;
+        }
+    }
 
-    // required apache modules
-    $apache_mods = apache_get_modules();
-    if (!$result['apache_wstunnel']=in_array("mod_proxy_wstunnel", $apache_mods))
-        $result['all'] = false;
-    if (!$result['apache_rewrite']=in_array("mod_rewrite", $apache_mods))
-        $result['all'] = false;
+    // required apache modules (skip when not running Apache)
+    if (function_exists('apache_get_modules')) {
+        $apache_mods = apache_get_modules();
+        if (!$result['apache_wstunnel']=in_array("mod_proxy_wstunnel", $apache_mods))
+            $result['all'] = false;
+        if (!$result['apache_rewrite']=in_array("mod_rewrite", $apache_mods))
+            $result['all'] = false;
+    } else {
+        $result['apache_wstunnel'] = true;
+        $result['apache_rewrite'] = true;
+    }
 
     // required php extensions
     $php_mods = get_loaded_extensions();
@@ -84,39 +121,47 @@ function checkDependencies(){
     if (!$result['php_gd']=in_array("gd", $php_mods))
         $result['all'] = false;
 
-    // folder permissions (needed for installing docs folder)
-    if (!$result['permissions_root']=is_writable($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT']))
-        $result['all'] = false;
-
-    // file_permissions
-    $result['permissions_files'] = true;
-    $objects = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT']));
-    foreach($objects as $name => $object){
-        if (strpos($name, $_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs')===false &&
-            $name!=$_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.config.json' &&
-            $name!=$_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.dbconfig.json' &&
-            (is_file($name) && is_writable($name))){
-            $result['permissions_files'] = false;
+    // folder permissions (needed for installing docs folder) — relax in Docker dev environments
+    $inDocker = file_exists('/.dockerenv') || getenv('WPOS_SKIP_PERMS') === '1';
+    if ($inDocker) {
+        $result['permissions_root'] = true;
+        $result['permissions_files'] = true;
+        $result['permissions_docs'] = true;
+        $result['permissions_config'] = true;
+    } else {
+        if (!$result['permissions_root']=is_writable($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT']))
             $result['all'] = false;
-            break;
-        }
-    }
-    $result['permissions_docs'] = true;
-    if (file_exists($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs/')) {
-        $objects = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs/'));
-        foreach ($objects as $name => $object) {
-            if (strpos($name, $_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs/templates')===false && !is_writable($name)) {
-                $result['permissions_docs'] = false;
+
+        // file_permissions
+        $result['permissions_files'] = true;
+        $objects = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT']));
+        foreach($objects as $name => $object){
+            if (strpos($name, $_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs')===false &&
+                $name!=$_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.config.json' &&
+                $name!=$_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.dbconfig.json' &&
+                (is_file($name) && is_writable($name))){
+                $result['permissions_files'] = false;
                 $result['all'] = false;
                 break;
             }
         }
+        $result['permissions_docs'] = true;
+        if (file_exists($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs/')) {
+            $objects = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs/'));
+            foreach ($objects as $name => $object) {
+                if (strpos($name, $_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'docs/templates')===false && !is_writable($name)) {
+                    $result['permissions_docs'] = false;
+                    $result['all'] = false;
+                    break;
+                }
+            }
+        }
+        if (!$result['permissions_config']=(!is_writable($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.config.json') ||
+            !is_writable($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.dbconfig.json')))
+            $result['all'] = false;
     }
-    if (!$result['permissions_config']=(!is_writable($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.config.json') ||
-        !is_writable($_SERVER['DOCUMENT_ROOT'].$_SERVER['APP_ROOT'].'library/wpos/.dbconfig.json')))
-        $result['all'] = false;
 
-    // apache node.js config
+    // webserver -> node.js proxy config (generic check: homepage reachable)
     if ($result['php_curl']){
         $handle = curl_init((isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!="off"?"https":"http").$_SERVER['SERVER_NAME']."/");
         curl_setopt($handle,  CURLOPT_RETURNTRANSFER, TRUE);

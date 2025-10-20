@@ -18,6 +18,33 @@ If you find that WallacePOS is the perfect companion for your business, please d
 
 [![Donate to WallacePOS](https://www.paypalobjects.com/en_AU/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=783UMXCNZGL68)
 
+## Docker (Dev) Quick Start
+
+The repo includes a lightweight Docker dev stack (Nginx + PHP‑FPM 8.3 + Node 22 + MySQL 8).
+
+1. Copy `.env.example` to `.env` (defaults are fine for local dev).
+2. Start: `docker compose up -d --build`
+3. Install PHP deps (if not already installed): run Composer inside the container or locally in `wallacepos/`.
+4. Open the installer: `http://localhost:8080/installer/`
+   - Database host: `db`, port: `3306`, database/user/password: `wpos`
+5. Admin: `http://localhost:8080/admin/`
+
+Notes
+- Websockets are proxied at `/socket.io/` to the Node feed server.
+- The Node server health endpoint is available at `http://node:8080/healthz` from within the network.
+
+## MySQL Strict Mode (ONLY_FULL_GROUP_BY)
+
+MySQL 8 enables `ONLY_FULL_GROUP_BY` by default. Queries used by the dashboard stats have been updated to select explicit aggregate columns and valid grouped fields, so no server SQL mode changes are required. If you run a custom MySQL with different SQL modes, no additional configuration is necessary for the bundled queries.
+
+## Modern Browsers and AppCache
+
+Modern browsers removed Application Cache. The POS continues to run online; offline AppCache has been disabled in dev by:
+- Removing the `manifest` attribute from top-level pages.
+- Downgrading the legacy AppCache alert to a non-blocking console warning.
+
+If you need offline capability, consider replacing AppCache with Service Workers.
+
 ## Server Prerequisites
 
 WallacePOS requires:

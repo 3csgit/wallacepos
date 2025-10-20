@@ -79,28 +79,35 @@ class WposAdminStats {
         $etime = isset($this->data->etime)?$this->data->etime:(time()*1000);
 
         // get non voided sales
-        if (($sales = $salesMdl->getTotals($stime, $etime, 3, false, false, $this->data->type))!==false){
+        $sales = $salesMdl->getTotals($stime, $etime, 3, false, false, $this->data->type);
+        if (is_array($sales) && isset($sales[0])){
             $stats->salerefs = $sales[0]['refs'];
             $stats->saletotal = $sales[0]['stotal'];
             $stats->salenum = $sales[0]['snum'];
+            $salesCtotal = isset($sales[0]['ctotal']) ? $sales[0]['ctotal'] : 0;
         } else {
+            $salesCtotal = 0;
             $result['error']= $salesMdl->errorInfo;
         }
         // get voided sales
         $voids = $salesMdl->getTotals($stime, $etime, 3, true, false, $this->data->type);
-        $stats->voidrefs = $voids[0]['refs'];
-        $stats->voidtotal = $voids[0]['stotal'];
-        $stats->voidnum = $voids[0]['snum'];
+        if (is_array($voids) && isset($voids[0])){
+            $stats->voidrefs = $voids[0]['refs'];
+            $stats->voidtotal = $voids[0]['stotal'];
+            $stats->voidnum = $voids[0]['snum'];
+        }
 
         // get refunds
         $refund = $voidMdl->getTotals($stime, $etime, false, false, $this->data->type);
-        $stats->refundrefs = $refund[0]['refs'];
-        $stats->refundtotal = $refund[0]['stotal'];
-        $stats->refundnum = $refund[0]['snum'];
+        if (is_array($refund) && isset($refund[0])){
+            $stats->refundrefs = $refund[0]['refs'];
+            $stats->refundtotal = $refund[0]['stotal'];
+            $stats->refundnum = $refund[0]['snum'];
+        }
 
         // calc total takings
         $stats->totaltakings = round($stats->saletotal - $stats->refundtotal, 2);
-        $stats->cost = round($sales[0]['ctotal'], 2);
+        $stats->cost = round($salesCtotal, 2);
         $stats->profit = round($stats->totaltakings - $stats->cost, 2);
         $stats->refs = [];
         $temprefs = $stats->salerefs.($stats->voidrefs!=null?(','.$stats->voidrefs):'').($stats->refundrefs!=null?(','.$stats->refundrefs):'');

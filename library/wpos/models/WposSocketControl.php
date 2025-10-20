@@ -103,23 +103,41 @@ class WposSocketControl {
      * @return bool
      */
     private function getServerStat(){
-		if ($this->isWindows) {
-			exec('TASKLIST /NH /V /FI "WindowTitle eq WPOS"', $output );
-			if (strpos($output[0], 'INFO')!==false){
-				$output[0] = 'Offline';
-				return false;
-			} else {
-				$output[0] = 'Online';
-				return true;
-			}
-		} else {
-			exec('ps aux | grep -E "[n]ode(js)? '.$_SERVER['DOCUMENT_ROOT'].'"', $output);
-			if (strpos($output[0], $_SERVER['DOCUMENT_ROOT'])!==false){
-				return true;
-			} else {
-				return false;
-			}
-		}
+        // Prefer HTTP health check (Docker/dev friendly)
+        if (function_exists('curl_init')) {
+            foreach ([
+                'http://node:8080/healthz',                // Docker service name
+                'http://127.0.0.1:8080/healthz',          // Local fallback
+            ] as $healthUrl) {
+                $h = curl_init($healthUrl);
+                curl_setopt($h, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($h, CURLOPT_CONNECTTIMEOUT, 1);
+                curl_setopt($h, CURLOPT_TIMEOUT, 2);
+                curl_exec($h);
+                $code = curl_getinfo($h, CURLINFO_HTTP_CODE);
+                curl_close($h);
+                if ($code === 200) {
+                    return true;
+                }
+            }
+        }
+
+        // Fallback to process inspection (legacy behavior)
+        if ($this->isWindows) {
+            $output = [];
+            @exec('TASKLIST /NH /V /FI "WindowTitle eq WPOS"', $output );
+            if (empty($output) || (isset($output[0]) && strpos($output[0], 'INFO')!==false)){
+                return false;
+            }
+            return true;
+        } else {
+            $output = [];
+            @exec('ps aux | grep -E "[n]ode(js)? '.$_SERVER['DOCUMENT_ROOT'].'"', $output);
+            if (!empty($output) && isset($output[0]) && strpos($output[0], $_SERVER['DOCUMENT_ROOT'])!==false){
+                return true;
+            }
+            return false;
+        }
     }
 
 }

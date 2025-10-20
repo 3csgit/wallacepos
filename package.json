@@ -5,14 +5,16 @@
   "description": "Web based POS system",
   "main": "/app/api/server.js",
   "scripts": {
+    "start": "node ./api/server.js",
+    "dev": "node ./api/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "WallaceIT",
   "license": "BSD-2-Clause",
   "dependencies": {
-    "socket.io": "~1.7.x"
+    "socket.io": "^4.7.5"
   },
   "engines": {
-    "node": "~4.2.x"
+    "node": ">=20"
   }
 }

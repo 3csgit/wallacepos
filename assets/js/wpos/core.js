@@ -49,9 +49,9 @@ function WPOS() {
             alert("Your browser does not support localStorage required to run the POS terminal.");
             return false;
         }
-        // Check application cache: not required to run
+        // Check application cache: legacy (not required to run). Suppress blocking alert.
         if (window.applicationCache == null){
-            alert("Your browser does not support applicationCache and will not be able to function offline.");
+            if (window && window.console && console.warn) console.warn("ApplicationCache unsupported; offline mode disabled.");
         }
         return true;
     }

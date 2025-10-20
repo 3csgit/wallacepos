@@ -74,7 +74,21 @@ class Auth{
      */
     public function getUser(){
         if (isset($_SESSION['userId'])) {
-            $user = ["id"=>$_SESSION['userId'], "username"=>$_SESSION['username'], "isadmin"=>$_SESSION['isadmin'], "sections"=>$_SESSION['permissions']['sections'], "csrf_token"=>$_SESSION['csrf_token']];
+            // Guard against missing/invalid permissions in fresh installs
+            $sections = ['access'=>'both','dashboard'=>'both'];
+            if (isset($_SESSION['permissions']) && is_array($_SESSION['permissions'])) {
+                if (isset($_SESSION['permissions']['sections']) && is_array($_SESSION['permissions']['sections'])) {
+                    $sections = $_SESSION['permissions']['sections'];
+                }
+            }
+            $csrf = isset($_SESSION['csrf_token']) ? $_SESSION['csrf_token'] : null;
+            $user = [
+                "id"        => $_SESSION['userId'],
+                "username"  => $_SESSION['username'],
+                "isadmin"   => $_SESSION['isadmin'],
+                "sections"  => $sections,
+                "csrf_token"=> $csrf
+            ];
             // add auth tokens if set
             if ($this->authTokens!==null){
                 $user = array_merge($user, $this->authTokens);
@@ -196,7 +210,20 @@ class Auth{
             $_SESSION['username'] = $username;
             $_SESSION['userId']   = $user['id'];
             $_SESSION['isadmin']  = $user['admin'];
-            $_SESSION['permissions']  = json_decode($user['permissions'], true);
+            // Decode permissions; provide sane defaults if missing
+            $perms = json_decode($user['permissions'], true);
+            if (!is_array($perms)) {
+                $perms = [
+                    'sections' => ['access'=>'both','dashboard'=>'both'],
+                    'apicalls' => []
+                ];
+            } elseif (!isset($perms['sections']) || !is_array($perms['sections'])) {
+                $perms['sections'] = ['access'=>'both','dashboard'=>'both'];
+            }
+            if (!isset($perms['apicalls']) || !is_array($perms['apicalls'])) {
+                $perms['apicalls'] = [];
+            }
+            $_SESSION['permissions']  = $perms;
 
             // CSRF Token
             if (function_exists('mcrypt_create_iv')) {
