@@ -719,17 +719,41 @@ function routeApiCall($action, $data, $result) {
 
                 $uploaddir = 'docs';
 
-                $file_type = $_FILES['foreign_character_upload']['type']; //returns the mimetype
+                $fileArr = $_FILES['file'];
+                $tmp = $fileArr['tmp_name'];
+                $reportedType = isset($fileArr['type']) ? $fileArr['type'] : '';
+                // Detect mime from content when available
+                $detectedType = '';
+                if (function_exists('finfo_open') && is_file($tmp)) {
+                    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                    if ($finfo) {
+                        $detectedType = finfo_file($finfo, $tmp);
+                        finfo_close($finfo);
+                    }
+                }
+                $file_type = strtolower($detectedType ?: $reportedType);
 
-                $allowed = array("image/jpeg", "image/gif", "image/png", "application/pdf");
+                $allowed = array("image/jpeg", "image/pjpeg", "image/jpg", "image/gif", "image/png", "application/pdf");
                 if(!in_array($file_type, $allowed)) {
-                    $result['error'] = 'Only jpg, gif, and pdf files are allowed.';
+                    $result['error'] = 'Only jpg, png, gif, and pdf files are allowed.';
                     break;
                 }
 
-                $newpath = $uploaddir . DIRECTORY_SEPARATOR . basename($_FILES['file']['name']);
+                // Ensure target folder exists
+                $targetDir = $_SERVER['DOCUMENT_ROOT'] . $_SERVER['APP_ROOT'] . $uploaddir;
+                if (!is_dir($targetDir)) {
+                    @mkdir($targetDir, 0775, true);
+                }
+                @chmod($targetDir, 0775);
 
-                if (move_uploaded_file($_FILES['file']['tmp_name'], $_SERVER['DOCUMENT_ROOT'] . $_SERVER['APP_ROOT'] . $newpath) !== false) {
+                // Sanitize filename
+                $name = basename($fileArr['name']);
+                $name = preg_replace('/[^A-Za-z0-9._-]+/', '_', $name);
+                $newpath = $uploaddir . DIRECTORY_SEPARATOR . $name;
+
+                $dest = $targetDir . DIRECTORY_SEPARATOR . $name;
+                if (move_uploaded_file($tmp, $dest) !== false) {
+                    @chmod($dest, 0644);
                     $result['data'] = ["path" => "/" . $newpath];
                 } else {
                     $result['error'] = "There was an error uploading the file " . $newpath;

@@ -51,6 +51,8 @@ class WposSocketIO {
      * @var string This hashkey provides authentication for php operations
      */
     private $hashkey = "5d40b50e172646b845640f50f296ac3fcbc191a7469260c46903c43cc6310ace";
+    private $host = '127.0.0.1';
+    private $port = 8080;
 
     /**
      * Initialise the elephantIO object and set the hashkey
@@ -59,8 +61,16 @@ class WposSocketIO {
         $conf = WposAdminSettings::getConfigFileValues(true);
         if (isset($conf->feedserver_key))
             $this->hashkey = $conf->feedserver_key;
+        if (isset($conf->feedserver_port))
+            $this->port = $conf->feedserver_port;
+        // Prefer docker host if inside container or env override
+        if (getenv('FEED_SERVER_HOST')){
+            $this->host = getenv('FEED_SERVER_HOST');
+        } else if (file_exists('/.dockerenv')){
+            $this->host = 'node';
+        }
 
-        $this->elephant = new Client(new Version1X('http://127.0.0.1:'.$conf->feedserver_port.'/?hashkey='.$this->hashkey));
+        $this->elephant = new Client(new Version1X('http://'.$this->host.':'.$this->port.'/?hashkey='.$this->hashkey));
     }
 
     /**
@@ -77,6 +87,28 @@ class WposSocketIO {
             $this->elephant->close();
         } catch(Exception $e){
             restore_error_handler();
+            // Fallback to HTTP endpoint for session add/remove when elephant.io cannot connect (e.g., socket.io v4)
+            if ($event==='session' && isset($data['data'])){
+                $sid = $data['data'];
+                $remove = isset($data['remove']) ? $data['remove'] : false;
+                $path = $remove?'/session-remove':'/session-add';
+                $url = 'http://'.$this->host.':'.$this->port.$path.'?sid='.urlencode($sid).'&hashkey='.$this->hashkey;
+                // Use curl if available
+                if (function_exists('curl_init')){
+                    $ch = curl_init($url);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+                    $body = curl_exec($ch);
+                    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    curl_close($ch);
+                    if ($code===200) return true;
+                } else {
+                    $ctx = stream_context_create(['http'=>['timeout'=>2]]);
+                    $body = @file_get_contents($url, false, $ctx);
+                    if ($body!==false) return true;
+                }
+            }
             return $e->getMessage();
         }
         restore_error_handler();

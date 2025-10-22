@@ -10,16 +10,50 @@
     ca: fs.readFileSync('/etc/apache2/certs/sub.class2.code.ca.crt').toString()
 };*/
 var http = require('http');
+var url = require('url');
 var fs = require('fs');
 var config = null;
 var configpath = __dirname+'/../docs/.config.json';
 
+function isPrivateAddress(addr) {
+    if (!addr) return false;
+    if (addr.startsWith('::ffff:')) addr = addr.replace('::ffff:', '');
+    if (addr === '127.0.0.1' || addr === '::1') return true;
+    if (addr.startsWith('10.')) return true;
+    if (addr.startsWith('192.168.')) return true;
+    if (addr.startsWith('172.')) { var p = parseInt(addr.split('.')[1],10); return p>=16 && p<=31; }
+    return false;
+}
+
 function wshandler(req, res) {
-    // Basic health endpoint and default 404
-    if (req.url === '/healthz') {
+    // Basic health endpoint and lightweight HTTP fallbacks for PHP auth
+    var parsed = url.parse(req.url, true);
+    if (parsed.pathname === '/healthz') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok' }));
         return;
+    }
+    if (parsed.pathname === '/session-add' || parsed.pathname === '/session-remove') {
+        var trustPrivate = (process.env.FEED_TRUST_PRIVATE || 'true').toLowerCase() === 'true';
+        var addr = (req.connection && req.connection.remoteAddress) || '';
+        var okNet = !trustPrivate || isPrivateAddress(addr);
+        if (!okNet || !parsed.query || parsed.query.hashkey !== hashkey || !parsed.query.sid) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status:'denied' }));
+            return;
+        }
+        if (parsed.pathname === '/session-add') {
+            sessions[parsed.query.sid] = true;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status:'ok' }));
+            return;
+        }
+        if (parsed.pathname === '/session-remove') {
+            if (sessions.hasOwnProperty(parsed.query.sid)) delete sessions[parsed.query.sid];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status:'ok' }));
+            return;
+        }
     }
     res.writeHead(404);
     res.end();
